@@ -702,5 +702,10 @@ async def register_endpoints(var, config: ConfigType):
             sdkconfig_option, sdkconfig_option in enabled_sdkconfig_clusters
         )
 
+    # AirQuality is code-driven: set_attribute has to reach its server object, which only
+    # links when the cluster is compiled in.
+    if CLUSTERS_BY_NAME["AirQuality"].sdkconfig_option in enabled_sdkconfig_clusters:
+        cg.add_define("USE_MATTER_AIR_QUALITY_CLUSTER")
+
     for global_include in global_includes:
         cg.add_global(cg.RawStatement(global_include), prepend=True)

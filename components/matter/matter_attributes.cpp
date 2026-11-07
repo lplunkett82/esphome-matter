@@ -7,6 +7,13 @@
 
 #include <platform/CHIPDeviceLayer.h>
 
+#ifdef USE_MATTER_AIR_QUALITY_CLUSTER
+#include <app/clusters/air-quality-server/AirQualityCluster.h>
+#include <clusters/AirQuality/AttributeIds.h>
+#include <clusters/AirQuality/ClusterId.h>
+#include <data_model_provider/esp_matter_data_model_provider.h>
+#endif
+
 #include <cinttypes>
 
 static const char *const TAG = "matter";
@@ -184,6 +191,30 @@ void set_attribute_value_on_matter_thread(uint16_t endpoint_id,
              attribute_id);
     return;
   }
+
+#ifdef USE_MATTER_AIR_QUALITY_CLUSTER
+  // AirQuality is a code-driven cluster: the value lives in its AirQualityCluster
+  // server, and esp-matter's attribute store refuses it with ESP_ERR_NOT_SUPPORTED.
+  namespace aq = chip::app::Clusters::AirQuality;
+  if (cluster_id == aq::Id && attribute_id == aq::Attributes::AirQuality::Id) {
+    auto *server =
+        esp_matter::data_model::provider::get_instance().registry().Get(
+            {endpoint_id, cluster_id});
+    if (server == nullptr) {
+      ESP_LOGE(TAG, "AirQuality server not registered on endpoint %u",
+               endpoint_id);
+      return;
+    }
+    auto status =
+        static_cast<chip::app::Clusters::AirQualityCluster *>(server)
+            ->SetAirQuality(
+                static_cast<aq::AirQualityEnum>(attribute_value.val.u8));
+    if (status != chip::Protocols::InteractionModel::Status::Success)
+      ESP_LOGE(TAG, "Failed to set AirQuality to %u on endpoint %u",
+               attribute_value.val.u8, endpoint_id);
+    return;
+  }
+#endif
 
   esp_err_t err = esp_matter::attribute::update(endpoint_id, cluster_id,
                                                 attribute_id, &attribute_value);
