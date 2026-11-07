@@ -99,12 +99,43 @@ ENDPOINT_SCHEMA = cv.All(
 )
 
 
+# Matter MeasurementUnitEnum for the concentration measurement clusters, keyed by ESPHome's unit
+# strings. Both micro signs appear in the wild (U+00B5 in esphome.const, U+03BC elsewhere).
+MEASUREMENT_UNITS = {
+    "ppm": 0,
+    "ppb": 1,
+    "ppt": 2,
+    "mg/m³": 3,
+    "µg/m³": 4,
+    "μg/m³": 4,
+    "ng/m³": 5,
+    "Bq/m³": 7,
+}
+
+
+def _sensor_unit(sensor_id: ID) -> str | None:
+    """unit_of_measurement of the sensor with this id, from the validated config."""
+    stack = [CORE.config]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get(CONF_ID) == sensor_id:
+                return node.get("unit_of_measurement")
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return None
+
+
 @dataclass
 class _ClusterConfig:
     # Whether or not the cluster is already created by a device type config.
     created: bool = False
     # Keys are feature names.
     enabled_features: dict[str, bool] = field(default_factory=dict)
+    # MeasurementUnitEnum value for a concentration cluster's NumericMeasurement feature.
+    # esp-matter defaults it to 0 (ppm), which mislabels PM and other mass concentrations.
+    measurement_unit: int | None = None
 
 
 class Endpoint:
@@ -449,6 +480,19 @@ class Endpoint:
         for feature_name in sensor_attribute.features:
             self._cluster_configs[cluster.name].enabled_features[feature_name] = True
 
+        if cluster.name.endswith("ConcentrationMeasurement"):
+            unit = _sensor_unit(sensor_id)
+            if unit in MEASUREMENT_UNITS:
+                self._cluster_configs[cluster.name].measurement_unit = MEASUREMENT_UNITS[unit]
+            else:
+                _LOGGER.warning(
+                    "Sensor %s maps to %s but its unit %r has no Matter equivalent; "
+                    "the cluster will report ppm",
+                    sensor_id,
+                    cluster.name,
+                    unit,
+                )
+
         sensor = await cg.get_variable(sensor_id)
         converter = cg.RawExpression(
             f"esphome::matter::conversion::{sensor_attribute.converter}"
@@ -512,6 +556,17 @@ class Endpoint:
             )
         if feature_flags:
             lines.append(f"{config_var}.feature_flags = {' | '.join(feature_flags)};")
+        if cluster_config.measurement_unit is not None:
+            # Min/MaxMeasuredValue default to 0, which every real reading would exceed; null
+            # means "unknown" in the spec.
+            numeric = f"{config_var}.features.numeric_measurement"
+            lines.extend(
+                (
+                    f"{numeric}.measurement_unit = {cluster_config.measurement_unit};",
+                    f"{numeric}.min_measured_value = nullable<float>();",
+                    f"{numeric}.max_measured_value = nullable<float>();",
+                )
+            )
         lines.extend(
             (
                 f"if ({cluster_ns}::create(endpoint, &{config_var}, esp_matter::CLUSTER_FLAG_SERVER) == nullptr)",
