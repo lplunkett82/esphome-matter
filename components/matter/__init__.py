@@ -207,6 +207,15 @@ async def to_code(config: ConfigType):
 
     add_idf_sdkconfig_option("CONFIG_MBEDTLS_HKDF_C", True)
     try:
+        from esphome.components.esp32 import require_mbedtls_tls_extras
+
+        # connectedhomeip's crypto PAL uses AES-CCM (mbedtls_ccm_*). ESPHome >= 2026.10 trims
+        # CONFIG_MBEDTLS_CCM_C unless a component requires it (issue #101).
+        require_mbedtls_tls_extras(("CONFIG_MBEDTLS_CCM_C",))
+    except ImportError:
+        # Older ESPHome does not trim CCM.
+        pass
+    try:
         from esphome.components.esp32 import require_certificate_bundle
 
         # Supported from ESPHome 2026.9.0
